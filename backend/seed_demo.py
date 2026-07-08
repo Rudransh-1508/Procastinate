@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from db.db import init_db, get_db, generate_id
 from analysis.insight_generator import InsightGenerator
+from cli.main import _local_user_id
 
 random.seed(42)
 
@@ -56,15 +57,15 @@ def _time_of_day(h):
     return "night"
 
 
-def wipe():
+def wipe(user_id: str):
     db = get_db()
-    for t in ["procrastination_events", "activity_windows", "checkin_logs",
-              "insights", "tasks", "profile_state"]:
-        db.execute(f"DELETE FROM {t}")
+    for t in ["procrastination_events", "activity_windows", "checkin_logs", "insights", "tasks"]:
+        db.execute(f"DELETE FROM {t} WHERE user_id = ?", (user_id,))
+    db.execute("DELETE FROM profile_state WHERE user_id = ?", (user_id,))
     db.commit()
 
 
-def seed():
+def seed(user_id: str):
     db = get_db()
     now = datetime.now(timezone.utc)
     n_events = 0
@@ -82,10 +83,10 @@ def seed():
             status = "pending" if avoided else "done"
             completed = None if avoided else _iso(created + timedelta(hours=random.uniform(1, 3)))
             db.execute(
-                """INSERT INTO tasks (id, source, title, task_type, estimated_minutes, stakes,
+                """INSERT INTO tasks (id, user_id, source, title, task_type, estimated_minutes, stakes,
                                       involves_other_people, created_at, completed_at, status, updated_at)
-                   VALUES (?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (task_id, random.choice(TITLES[ttype]), ttype, est,
+                   VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (task_id, user_id, random.choice(TITLES[ttype]), ttype, est,
                  random.choice(["low", "medium", "high"]),
                  ttype in ("social", "collaborative"),
                  _iso(created), completed, status, _iso(created)),
@@ -105,12 +106,12 @@ def seed():
             disp = DISP_BY_TIME.get(tod) if random.random() < 0.6 else random.choice(DISPLACEMENTS)
             db.execute(
                 """INSERT INTO procrastination_events
-                   (id, task_id, detected_at, detection_source, delay_start_at, delay_end_at,
+                   (id, user_id, task_id, detected_at, detection_source, delay_start_at, delay_end_at,
                     delay_hours, displacement_type, displacement_duration_minutes, time_of_day,
                     day_of_week, energy_level, stress_level, unlock_trigger, confidence_score)
-                   VALUES (?, ?, ?, 'combined', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.8)""",
+                   VALUES (?, ?, ?, ?, 'combined', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.8)""",
                 (
-                    generate_id(), task_id, _iso(detected), _iso(created),
+                    generate_id(), user_id, task_id, _iso(detected), _iso(created),
                     _iso(detected + timedelta(hours=2)) if resolved else None,
                     delay_hours, disp, round(random.uniform(20, 120), 1), tod,
                     detected.weekday(), random.randint(1, 5), random.randint(1, 5),
@@ -122,16 +123,16 @@ def seed():
         # a check-in most days
         if random.random() < 0.8:
             db.execute(
-                """INSERT INTO checkin_logs (id, submitted_at, checkin_type, energy_level,
+                """INSERT INTO checkin_logs (id, user_id, submitted_at, checkin_type, energy_level,
                                              stress_level, had_heavy_meetings, hours_of_sleep, free_text)
-                   VALUES (?, ?, 'evening', ?, ?, ?, ?, ?)""",
-                (generate_id(), _iso(date.replace(hour=19)), random.randint(1, 5),
+                   VALUES (?, ?, ?, 'evening', ?, ?, ?, ?, ?)""",
+                (generate_id(), user_id, _iso(date.replace(hour=19)), random.randint(1, 5),
                  random.randint(1, 5), random.random() < 0.4, round(random.uniform(5, 8.5), 1),
                  "synthetic check-in"),
             )
 
     db.commit()
-    summary = InsightGenerator().refresh_profile_state()
+    summary = InsightGenerator(user_id).refresh_profile_state()
     print(f"Seeded {n_events} procrastination events across 30 days.")
     print(f"Profile: {summary}")
 
@@ -139,9 +140,22 @@ def seed():
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--wipe", action="store_true", help="Clear all data before seeding")
+    ap.add_argument(
+        "--user-id",
+        default=None,
+        help="User to seed (defaults to the local CLI pseudo-user, NOT a real web-app account)",
+    )
     args = ap.parse_args()
     init_db()
+    uid = args.user_id or _local_user_id()
     if args.wipe:
-        wipe()
+        wipe(uid)
         print("Wiped existing data.")
-    seed()
+    print(f"Seeding for user_id={uid}")
+    if not args.user_id:
+        print(
+            "(This is the local CLI pseudo-user — it won't show up when you log into the "
+            "web app with Google. Pass --user-id <your real user id> to seed your web account; "
+            "find it via GET /api/users/me while logged in.)"
+        )
+    seed(uid)

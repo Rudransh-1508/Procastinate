@@ -1,8 +1,12 @@
-"""All HTTP endpoints for the Procrastination Profiler."""
+"""All HTTP endpoints for the Procrastination Profiler.
+
+Every route requires an authenticated user (Depends(current_active_user))
+and every query/write is scoped to that user's own data.
+"""
 import json
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import config
@@ -16,12 +20,18 @@ from agent.orchestrator import ProcrastinationAgent
 from analysis.pattern_analyzer import PatternAnalyzer
 from analysis.insight_generator import InsightGenerator, confidence_for
 from agent.tool_executor import _decode_profile
+from auth.models import User
+from auth.users import current_active_user
 
 router = APIRouter()
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _uid(user: User) -> str:
+    return str(user.id)
 
 
 # --- request models --------------------------------------------------------
@@ -57,12 +67,15 @@ class EventInput(BaseModel):
 
 # --- status / dashboard ----------------------------------------------------
 @router.get("/status")
-def get_status():
+def get_status(user: User = Depends(current_active_user)):
+    uid = _uid(user)
     db = get_db()
     event_count = db.execute(
-        "SELECT COUNT(*) AS c FROM procrastination_events"
+        "SELECT COUNT(*) AS c FROM procrastination_events WHERE user_id = ?", (uid,)
     ).fetchone()["c"]
-    task_count = db.execute("SELECT COUNT(*) AS c FROM tasks").fetchone()["c"]
+    task_count = db.execute(
+        "SELECT COUNT(*) AS c FROM tasks WHERE user_id = ?", (uid,)
+    ).fetchone()["c"]
     return {
         "total_events": event_count,
         "total_tasks": task_count,
@@ -73,10 +86,11 @@ def get_status():
 
 
 @router.get("/dashboard")
-def get_dashboard():
+def get_dashboard(user: User = Depends(current_active_user)):
     """Single aggregate powering every chart on the dashboard."""
-    analyzer = PatternAnalyzer()
-    status = get_status()
+    uid = _uid(user)
+    analyzer = PatternAnalyzer(uid)
+    status = get_status(user)
     return {
         "status": status,
         "avoidance_by_type": analyzer.avoidance_by_task_type(),
@@ -89,30 +103,32 @@ def get_dashboard():
 
 # --- check-in --------------------------------------------------------------
 @router.get("/checkin/prompt")
-def checkin_prompt(checkin_type: str = "morning"):
-    stored = get_latest_prompt(checkin_type)
+def checkin_prompt(checkin_type: str = "morning", user: User = Depends(current_active_user)):
+    uid = _uid(user)
+    stored = get_latest_prompt(uid, checkin_type)
     if stored:
         return {"prompt": stored, "source": "scheduled"}
     return {
-        "prompt": ProcrastinationAgent().generate_checkin_question(checkin_type),
+        "prompt": ProcrastinationAgent(uid).generate_checkin_question(checkin_type),
         "source": "live",
     }
 
 
 @router.post("/checkin")
-def submit_checkin(body: CheckinInput):
+def submit_checkin(body: CheckinInput, user: User = Depends(current_active_user)):
+    uid = _uid(user)
     parser = CheckinParser()
     structured = parser.parse(body.text)
-    task_ids = parser.match_tasks_to_ids(structured.get("tasks_mentioned", []))
+    task_ids = parser.match_tasks_to_ids(structured.get("tasks_mentioned", []), uid)
 
     db = get_db()
     db.execute(
         """INSERT INTO checkin_logs
-           (id, submitted_at, checkin_type, energy_level, stress_level, social_context,
+           (id, user_id, submitted_at, checkin_type, energy_level, stress_level, social_context,
             hours_of_sleep, had_heavy_meetings, free_text, extracted_data, tasks_mentioned)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            generate_id(), _now_iso(), body.checkin_type,
+            generate_id(), uid, _now_iso(), body.checkin_type,
             structured.get("energy_level"), structured.get("stress_level"),
             structured.get("social_context"), structured.get("hours_of_sleep"),
             structured.get("had_heavy_meetings"), body.text,
@@ -125,23 +141,24 @@ def submit_checkin(body: CheckinInput):
 
 # --- query / reports -------------------------------------------------------
 @router.post("/query")
-def query_agent(body: QueryInput):
-    agent = ProcrastinationAgent()
+def query_agent(body: QueryInput, user: User = Depends(current_active_user)):
+    agent = ProcrastinationAgent(_uid(user))
     response = agent.run(body.message, body.conversation_history)
     return {"response": response}
 
 
 @router.get("/report/weekly")
-def get_weekly_report():
-    report = InsightGenerator().generate_weekly_report()
+def get_weekly_report(user: User = Depends(current_active_user)):
+    report = InsightGenerator(_uid(user)).generate_weekly_report()
     return {"report": report}
 
 
 @router.get("/insights")
-def list_insights(limit: int = 20):
+def list_insights(limit: int = 20, user: User = Depends(current_active_user)):
     db = get_db()
     rows = db.execute(
-        "SELECT * FROM insights ORDER BY generated_at DESC LIMIT ?", (limit,)
+        "SELECT * FROM insights WHERE user_id = ? ORDER BY generated_at DESC LIMIT ?",
+        (_uid(user), limit),
     ).fetchall()
     out = []
     for r in rows:
@@ -157,42 +174,49 @@ def list_insights(limit: int = 20):
 
 # --- profile ---------------------------------------------------------------
 @router.get("/profile")
-def get_profile():
+def get_profile(user: User = Depends(current_active_user)):
     db = get_db()
-    profile = db.execute("SELECT * FROM profile_state WHERE id = 1").fetchone()
+    profile = db.execute(
+        "SELECT * FROM profile_state WHERE user_id = ?", (_uid(user),)
+    ).fetchone()
     if not profile:
         return {"status": "no profile yet", "events_needed": config.CONFIDENCE_MEDIUM}
     return _decode_profile(profile)
 
 
 @router.post("/profile/refresh")
-def refresh_profile():
-    return InsightGenerator().refresh_profile_state()
+def refresh_profile(user: User = Depends(current_active_user)):
+    return InsightGenerator(_uid(user)).refresh_profile_state()
 
 
 # --- tasks / events --------------------------------------------------------
 @router.get("/tasks")
-def list_tasks(status: str | None = None):
+def list_tasks(status: str | None = None, user: User = Depends(current_active_user)):
+    uid = _uid(user)
     db = get_db()
     if status:
         rows = db.execute(
-            "SELECT * FROM tasks WHERE status = ? ORDER BY created_at DESC", (status,)
+            "SELECT * FROM tasks WHERE user_id = ? AND status = ? ORDER BY created_at DESC",
+            (uid, status),
         ).fetchall()
     else:
-        rows = db.execute("SELECT * FROM tasks ORDER BY created_at DESC").fetchall()
+        rows = db.execute(
+            "SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at DESC", (uid,)
+        ).fetchall()
     return {"tasks": [dict(r) for r in rows]}
 
 
 @router.post("/tasks")
-def add_task(body: TaskInput):
+def add_task(body: TaskInput, user: User = Depends(current_active_user)):
+    uid = _uid(user)
     db = get_db()
     task_id = generate_id()
     db.execute(
-        """INSERT INTO tasks (id, source, title, task_type, estimated_minutes, stakes,
+        """INSERT INTO tasks (id, user_id, source, title, task_type, estimated_minutes, stakes,
                               involves_other_people, assigned_by, created_at, status, updated_at)
-           VALUES (?, 'manual', ?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
+           VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
         (
-            task_id, body.title, body.task_type, body.estimated_minutes, body.stakes,
+            task_id, uid, body.title, body.task_type, body.estimated_minutes, body.stakes,
             body.involves_other_people, body.assigned_by, _now_iso(), _now_iso(),
         ),
     )
@@ -200,30 +224,34 @@ def add_task(body: TaskInput):
 
     flag = None
     try:
-        flag = InsightGenerator().generate_task_flag(body.model_dump())
+        flag = InsightGenerator(uid).generate_task_flag(body.model_dump())
     except Exception:
         flag = None
     return {"task_id": task_id, "proactive_insight": flag}
 
 
 @router.get("/events")
-def list_events(limit: int = 100):
+def list_events(limit: int = 100, user: User = Depends(current_active_user)):
     db = get_db()
     rows = db.execute(
         """SELECT pe.*, t.title AS task_title, t.task_type
            FROM procrastination_events pe
            LEFT JOIN tasks t ON t.id = pe.task_id
+           WHERE pe.user_id = ?
            ORDER BY pe.detected_at DESC LIMIT ?""",
-        (limit,),
+        (_uid(user), limit),
     ).fetchall()
     return {"events": [dict(r) for r in rows]}
 
 
 @router.post("/events")
-def log_event(body: EventInput):
+def log_event(body: EventInput, user: User = Depends(current_active_user)):
     """Manually log (or resolve) a procrastination event for a task."""
+    uid = _uid(user)
     db = get_db()
-    task = db.execute("SELECT * FROM tasks WHERE id = ?", (body.task_id,)).fetchone()
+    task = db.execute(
+        "SELECT * FROM tasks WHERE id = ? AND user_id = ?", (body.task_id, uid)
+    ).fetchone()
     if not task:
         raise HTTPException(status_code=404, detail="task not found")
 
@@ -231,12 +259,12 @@ def log_event(body: EventInput):
     event_id = generate_id()
     db.execute(
         """INSERT INTO procrastination_events
-           (id, task_id, detected_at, detection_source, delay_start_at, delay_end_at,
+           (id, user_id, task_id, detected_at, detection_source, delay_start_at, delay_end_at,
             delay_hours, displacement_type, unlock_trigger, energy_level, stress_level,
             notes, day_of_week, time_of_day, confidence_score)
-           VALUES (?, ?, ?, 'checkin', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0)""",
+           VALUES (?, ?, ?, ?, 'checkin', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0)""",
         (
-            event_id, body.task_id, now.isoformat(),
+            event_id, uid, body.task_id, now.isoformat(),
             task["created_at"] or now.isoformat(),
             now.isoformat() if body.delay_resolved else None,
             body.delay_hours, body.displacement_type, body.unlock_trigger,
@@ -250,8 +278,9 @@ def log_event(body: EventInput):
 
 # --- sync ------------------------------------------------------------------
 @router.post("/sync")
-def manual_sync():
-    file_res = sync_task_file(config.TASKS_FILE)
-    poll_res = TaskPoller().sync()
-    enriched = EventEnricher().enrich_all_open_events()
+def manual_sync(user: User = Depends(current_active_user)):
+    uid = _uid(user)
+    file_res = sync_task_file(config.TASKS_FILE, uid)
+    poll_res = TaskPoller(uid).sync()
+    enriched = EventEnricher(uid).enrich_all_open_events()
     return {"file": file_res, "poller": poll_res, "enriched": enriched}
