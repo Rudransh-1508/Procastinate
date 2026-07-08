@@ -1,14 +1,14 @@
 # Procrastination Profiler
 
-A **local-first AI agent** that builds a personal model of *how* you procrastinate. It combines
-three data sources — your task list, passive activity (ActivityWatch), and 2-minute natural-language
-check-ins — then surfaces non-obvious patterns about *when, why, and how* you avoid specific kinds of
-work. Not a nag. A curious scientist for your own behavior.
+A **multi-user, local-first AI agent** that builds a personal model of *how* you procrastinate. It
+combines three data sources — your task list, passive activity (ActivityWatch), and 2-minute
+natural-language check-ins — then surfaces non-obvious patterns about *when, why, and how* you avoid
+specific kinds of work. Not a nag. A curious scientist for your own behavior.
 
-> Local-first. No cloud. Your data stays on your machine.
+> Sign in with Google. Every task, event, and insight is scoped to your account.
 > Useless on day 1, genuinely interesting after 30 days.
 
-![stack](https://img.shields.io/badge/backend-FastAPI-009688) ![stack](https://img.shields.io/badge/db-SQLite-003B57) ![stack](https://img.shields.io/badge/llm-Groq-F55036) ![stack](https://img.shields.io/badge/frontend-React%20%2B%20Vite-61DAFB)
+![stack](https://img.shields.io/badge/backend-FastAPI-009688) ![stack](https://img.shields.io/badge/db-SQLite-003B57) ![stack](https://img.shields.io/badge/llm-Groq-F55036) ![stack](https://img.shields.io/badge/frontend-React%20%2B%20Vite-61DAFB) ![stack](https://img.shields.io/badge/auth-Google%20OAuth-4285F4)
 
 ---
 
@@ -17,12 +17,13 @@ work. Not a nag. A curious scientist for your own behavior.
 | Layer | Tech |
 |-------|------|
 | Backend API | Python 3.11 · FastAPI · Uvicorn |
-| Database | SQLite (`backend/data/profiler.db`) |
+| Database | SQLite (`backend/data/profiler.db`) — every domain table scoped by `user_id` |
+| Auth | Google OAuth via **fastapi-users** + async SQLAlchemy (`backend/auth/`) |
 | LLM | **Groq** (OpenAI-compatible) — `llama-3.3-70b-versatile` (agent) + `llama-3.1-8b-instant` (extraction) |
 | Stats engine | scipy + numpy (real correlation, not LLM guessing) |
-| Scheduler | APScheduler (hourly sync, daily check-ins, weekly report) |
-| CLI | Typer |
-| Frontend | React · Vite · Tailwind · Recharts (dark, data-dense dashboard) |
+| Scheduler | APScheduler (hourly sync, daily check-ins, weekly report — runs per active user) |
+| CLI | Typer (local-only pseudo-user, see [CLI](#cli) below) |
+| Frontend | React · Vite · Tailwind · Recharts (dark, coral-accented dashboard) |
 
 Three data sources, combined by a **procrastination event detector**:
 
@@ -34,21 +35,34 @@ Three data sources, combined by a **procrastination event detector**:
 
 ## Quickstart
 
-### 1. Backend
+### 1. Google OAuth (required to sign in)
+
+1. Go to <https://console.cloud.google.com/apis/credentials> → **Create Credentials → OAuth client
+   ID** → Application type **Web application**.
+2. Add authorized redirect URI: `http://localhost:8000/api/auth/google/callback`.
+3. Copy the **Client ID** and **Client secret**.
+
+### 2. Backend
 
 ```bash
 cd backend
-cp .env.example .env          # then paste your Groq key into GROQ_API_KEY
+cp .env.example .env
+# paste your Groq key into GROQ_API_KEY
+# paste the Google client id/secret into GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET
+# generate AUTH_SECRET: python -c "import secrets; print(secrets.token_urlsafe(32))"
 uv venv --python 3.11
 uv pip install -e .
 uv run uvicorn api.main:app --reload --port 8000
 ```
 
-> A `.env` with a working Groq key may already be present. Get a free key at
-> <https://console.groq.com/keys>. **Without a key the app still runs** — check-in parsing falls back
-> to regex heuristics and the agent reports it needs a key; all statistics/charts work regardless.
+> A `.env` with a working Groq key and a generated `AUTH_SECRET` may already be present — you still
+> need to fill in your own `GOOGLE_OAUTH_CLIENT_ID`/`SECRET` to sign in. **Without Google OAuth
+> configured, the web app's login button will show an error** ("Google OAuth is not configured"), but
+> the API itself still boots — see the [CLI](#cli) section for a login-free local workflow.
+> **Without a Groq key**, check-in parsing falls back to regex heuristics and the agent reports it
+> needs a key; statistics/charts work regardless.
 
-### 2. Frontend
+### 3. Frontend
 
 ```bash
 cd frontend
@@ -56,16 +70,20 @@ npm install
 npm run dev        # http://localhost:5173  (proxies /api → :8000)
 ```
 
-Open **http://localhost:5173**.
+Open **http://localhost:5173**, click **Sign in with Google**, and you land on your own dashboard.
 
-### 3. (Optional) See it populated immediately
+### 4. (Optional) See it populated immediately
 
-The database starts **empty** by design. To load ~30 days of synthetic data:
+The database starts **empty** by design, per account. To load ~30 days of synthetic data into your
+signed-in account: sign in once, grab your user id from `GET /api/users/me` (or the JWT payload), then:
 
 ```bash
 cd backend
-uv run python seed_demo.py            # or: uv run python seed_demo.py --wipe
+uv run python seed_demo.py --user-id <your-user-id>          # or: add --wipe to clear first
 ```
+
+Omitting `--user-id` seeds the CLI's own local pseudo-user instead (see [CLI](#cli)) — useful for
+quickly poking at the stats engine without going through OAuth.
 
 ---
 
@@ -83,6 +101,14 @@ uv run python -m cli.main report weekly
 uv run python -m cli.main sync
 ```
 
+> **Important:** the web app is multi-user (Google OAuth); the CLI has no login flow. It instead
+> operates as a persistent **local pseudo-user** — a UUID generated once and cached in
+> `backend/.cli_user_id`. That id is *not* a row in the real `users` table, so **CLI-created data
+> never appears in the web app when you sign in with Google, and vice versa.** Treat the CLI as a
+> separate local sandbox for scripting/testing the stats engine and agent — not as an alternate way
+> to edit your real account's data. (`seed_demo.py --user-id <id>` is the way to write into a real
+> signed-in account.)
+
 ---
 
 ## The four screens
@@ -99,11 +125,17 @@ uv run python -m cli.main sync
 
 ## API
 
+**Auth** (public): `GET /api/auth/google/authorize` · `GET /api/auth/google/callback` ·
+`POST /api/auth/jwt/login` · `POST /api/auth/jwt/logout` · `GET/PATCH /api/users/me`
+
+**Domain** (all require `Authorization: Bearer <jwt>`, scoped to the caller's own data):
 `GET /api/status` · `GET /api/dashboard` · `GET /api/profile` · `POST /api/profile/refresh` ·
 `GET/POST /api/tasks` · `GET/POST /api/events` · `POST /api/checkin` · `GET /api/checkin/prompt` ·
 `POST /api/query` · `GET /api/report/weekly` · `GET /api/insights` · `POST /api/sync`
 
-Interactive docs at **http://localhost:8000/docs**.
+Interactive docs at **http://localhost:8000/docs** — use the "Authorize" button with a JWT obtained
+from the Google sign-in flow (copy it from `localStorage.profiler_token` in the browser after
+logging in).
 
 ---
 
