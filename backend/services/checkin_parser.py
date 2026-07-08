@@ -110,13 +110,13 @@ class CheckinParser:
         }
 
     # ------------------------------------------------------------------
-    def match_tasks_to_ids(self, mentioned_titles: list[str]) -> list[str]:
-        """Fuzzy-match mentioned fragments against pending task titles."""
+    def match_tasks_to_ids(self, mentioned_titles: list[str], user_id: str) -> list[str]:
+        """Fuzzy-match mentioned fragments against this user's pending task titles."""
         if not mentioned_titles:
             return []
         db = get_db()
         tasks = db.execute(
-            "SELECT id, title FROM tasks WHERE status='pending'"
+            "SELECT id, title FROM tasks WHERE status='pending' AND user_id = ?", (user_id,)
         ).fetchall()
         matched: list[str] = []
         for mention in mentioned_titles:

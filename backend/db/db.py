@@ -40,8 +40,12 @@ def generate_id() -> str:
     return uuid.uuid4().hex
 
 
-def generate_id_from_title(title: str) -> str:
-    """Deterministic ID derived from a task title (for plaintext task dedup)."""
+def generate_id_from_title(title: str, user_id: str) -> str:
+    """Deterministic ID derived from (user_id, title) for plaintext task dedup.
+
+    Namespaced by user so two users with an identically-titled task in their
+    plaintext file never collide on the same primary key.
+    """
     slug = re.sub(r"\s+", "-", title.strip().lower())
-    digest = hashlib.sha1(slug.encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha1(f"{user_id}:{slug}".encode("utf-8")).hexdigest()[:12]
     return f"pt-{digest}"

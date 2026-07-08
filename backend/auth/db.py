@@ -3,6 +3,7 @@ from collections.abc import AsyncGenerator
 
 from fastapi import Depends
 from fastapi_users.db import SQLAlchemyUserDatabase
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import config
@@ -27,3 +28,10 @@ async def get_user_db(
     session: AsyncSession = Depends(get_async_session),
 ) -> AsyncGenerator[SQLAlchemyUserDatabase, None]:
     yield SQLAlchemyUserDatabase(session, User, OAuthAccount)
+
+
+async def list_active_user_ids() -> list[str]:
+    """All active user IDs, for background jobs that must run per-user."""
+    async with async_session_maker() as session:
+        result = await session.execute(select(User.id).where(User.is_active.is_(True)))
+        return [str(uid) for uid in result.scalars().all()]

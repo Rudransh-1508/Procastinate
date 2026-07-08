@@ -27,7 +27,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def parse_task_file(filepath: str) -> dict[str, dict]:
+def parse_task_file(filepath: str, user_id: str) -> dict[str, dict]:
     """Parse a task file into {task_id: {...}}. Returns {} if file missing."""
     path = Path(filepath)
     if not path.exists():
@@ -42,7 +42,7 @@ def parse_task_file(filepath: str) -> dict[str, dict]:
             title = _strip_meta(content)
             if not title:
                 continue
-            task_id = generate_id_from_title(title)
+            task_id = generate_id_from_title(title, user_id)
             tasks[task_id] = {"title": title, "done": done, **meta}
     return tasks
 
@@ -74,21 +74,23 @@ def _parse_duration(val: str) -> int | None:
     return int(num * 60) if unit.startswith("h") else int(num)
 
 
-def sync_task_file(filepath: str) -> dict:
-    """Upsert tasks from the file into the DB. Returns counts."""
+def sync_task_file(filepath: str, user_id: str) -> dict:
+    """Upsert tasks from the file into the DB for one user. Returns counts."""
     db = get_db()
-    parsed = parse_task_file(filepath)
+    parsed = parse_task_file(filepath, user_id)
     added = updated = 0
     for task_id, t in parsed.items():
-        existing = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        existing = db.execute(
+            "SELECT * FROM tasks WHERE id = ? AND user_id = ?", (task_id, user_id)
+        ).fetchone()
         status = "done" if t["done"] else "pending"
         if not existing:
             db.execute(
-                """INSERT INTO tasks (id, source, title, task_type, estimated_minutes,
+                """INSERT INTO tasks (id, user_id, source, title, task_type, estimated_minutes,
                                       stakes, involves_other_people, created_at, status, updated_at)
-                   VALUES (?, 'plain_text', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, 'plain_text', ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    task_id, t["title"], t.get("task_type"), t.get("estimated_minutes"),
+                    task_id, user_id, t["title"], t.get("task_type"), t.get("estimated_minutes"),
                     t.get("stakes"), t.get("involves_other_people"),
                     _now_iso(), status, _now_iso(),
                 ),
@@ -97,8 +99,8 @@ def sync_task_file(filepath: str) -> dict:
         elif existing["status"] != status:
             done_at = _now_iso() if status == "done" else None
             db.execute(
-                "UPDATE tasks SET status=?, completed_at=?, updated_at=? WHERE id=?",
-                (status, done_at, _now_iso(), task_id),
+                "UPDATE tasks SET status=?, completed_at=?, updated_at=? WHERE id=? AND user_id=?",
+                (status, done_at, _now_iso(), task_id, user_id),
             )
             updated += 1
     db.commit()
@@ -108,15 +110,16 @@ def sync_task_file(filepath: str) -> dict:
 class TaskFileWatcher(FileSystemEventHandler):
     """Watchdog handler that re-syncs the task file on modification."""
 
-    def __init__(self, filepath: str):
+    def __init__(self, filepath: str, user_id: str):
         self.filepath = str(Path(filepath).resolve())
+        self.user_id = user_id
 
     def on_modified(self, event):  # pragma: no cover - requires fs events
         if getattr(event, "src_path", None) == self.filepath:
-            sync_task_file(self.filepath)
+            sync_task_file(self.filepath, self.user_id)
 
 
-def start_watcher(filepath: str):  # pragma: no cover - requires running loop
+def start_watcher(filepath: str, user_id: str):  # pragma: no cover - requires running loop
     """Start a background observer for the task file. Returns observer or None."""
     if not _WATCHDOG:
         return None
@@ -124,6 +127,6 @@ def start_watcher(filepath: str):  # pragma: no cover - requires running loop
     if not path.exists():
         return None
     observer = Observer()
-    observer.schedule(TaskFileWatcher(filepath), str(path.parent), recursive=False)
+    observer.schedule(TaskFileWatcher(filepath, user_id), str(path.parent), recursive=False)
     observer.start()
     return observer
