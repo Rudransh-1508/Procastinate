@@ -1,0 +1,94 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: #111111;
+  color: #ededed;
+  font-family: "Fira Sans", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "tnum" 1; /* tabular figures for data */
+}
+
+/* tabular numerals for any data figure */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-family: "Fira Code", ui-monospace, monospace;
+}
+
+/* subtle scrollbars */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #3a3a3a;
+  border-radius: 8px;
+  border: 2px solid #111111;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  .panel {
+    @apply bg-ink-800 border border-ink-500 rounded-xl2 shadow-panel;
+  }
+  .panel-title {
+    @apply text-xs font-semibold uppercase tracking-wider text-fg-muted;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium
+      transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand
+      focus-visible:ring-offset-2 focus-visible:ring-offset-ink-900 disabled:opacity-50
+      disabled:cursor-not-allowed cursor-pointer;
+  }
+  .btn-primary {
+    @apply btn bg-brand text-ink-900 font-semibold hover:bg-brand-bright;
+  }
+  .btn-ghost {
+    @apply btn bg-ink-700 text-fg hover:bg-ink-600 border border-ink-500;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium;
+  }
+  .input {
+    @apply w-full rounded-lg bg-ink-900 border border-ink-500 px-3.5 py-2.5 text-sm text-fg
+      placeholder:text-fg-faint focus:outline-none focus:border-brand focus:ring-1 focus:ring-brand
+      transition-colors;
+  }
+
+  /* Warm accent word (headings) — italic serif reads editorial, not "AI" */
+  .text-accent {
+    @apply font-display italic text-brand-bright;
+  }
+
+  /* Soft warm-bordered card */
+  .card-natural {
+    @apply bg-ink-800 border border-ink-500 rounded-xl2;
+  }
+
+  /* Solid natural pill button (landing CTA) */
+  .btn-cta {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-6 py-3 text-sm
+      font-semibold text-ink-900 bg-brand hover:bg-brand-bright transition-colors cursor-pointer;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
