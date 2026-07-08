@@ -1,11 +1,22 @@
 // Thin fetch wrapper around the backend API (proxied at /api during dev).
+// Attaches the bearer token from localStorage to every request; on 401
+// (expired/invalid session) it clears the token and asks the app to bounce
+// to /login via a custom event (AuthContext doesn't poll — it reacts to this).
 const BASE = "/api";
+const TOKEN_KEY = "profiler_token";
 
 async function request(path, options = {}) {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+  const token = localStorage.getItem(TOKEN_KEY);
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${BASE}${path}`, { ...options, headers });
+
+  if (res.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
+    window.dispatchEvent(new CustomEvent("profiler:unauthorized"));
+    throw new Error("401: session expired");
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -40,3 +51,5 @@ export const api = {
   logEvent: (event) => request("/events", { method: "POST", body: JSON.stringify(event) }),
   sync: () => request("/sync", { method: "POST" }),
 };
+
+export const googleAuthorizeUrl = () => `${BASE}/auth/google/authorize`;

@@ -1,7 +1,8 @@
-import { NavLink, Link } from "react-router-dom";
+import { NavLink, Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Icon } from "./icons.jsx";
 import { EASE } from "../motion.js";
+import { useAuth } from "../AuthContext.jsx";
 
 const nav = [
   { to: "/app", label: "Dashboard", icon: Icon.Dashboard, end: true },
@@ -11,6 +12,14 @@ const nav = [
 ];
 
 export default function Sidebar() {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const signOut = () => {
+    logout();
+    navigate("/login", { replace: true });
+  };
+
   return (
     <aside className="flex h-full w-[220px] shrink-0 flex-col border-r border-ink-500 bg-ink-800 px-3 py-5">
       <motion.div
@@ -60,8 +69,23 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <div className="mt-4 px-1">
-        <p className="text-[10px] leading-relaxed text-fg-faint">
+      <div className="mt-4 space-y-3 border-t border-ink-500 pt-3">
+        {user && (
+          <div className="flex items-center gap-2.5 px-2">
+            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-ink-600 text-xs font-semibold text-fg-muted">
+              {(user.email || "?")[0].toUpperCase()}
+            </span>
+            <span className="truncate text-xs text-fg-muted">{user.email}</span>
+          </div>
+        )}
+        <button
+          onClick={signOut}
+          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-fg-muted transition-colors hover:bg-ink-700 hover:text-fg"
+        >
+          <Icon.LogOut width={17} height={17} />
+          Sign out
+        </button>
+        <p className="px-2 text-[10px] leading-relaxed text-fg-faint">
           Local-first. Your data stays on this machine.
         </p>
       </div>
