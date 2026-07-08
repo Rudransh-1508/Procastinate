@@ -52,8 +52,21 @@ def test_fallback_always_returns_full_shape(monkeypatch):
 def test_match_tasks_to_ids(fresh_db, monkeypatch):
     db = fresh_db.get_db()
     db.execute(
-        "INSERT INTO tasks (id, source, title, status) VALUES ('x1', 'manual', 'Write the client proposal', 'pending')"
+        "INSERT INTO tasks (id, user_id, source, title, status) "
+        "VALUES ('x1', 'u1', 'manual', 'Write the client proposal', 'pending')"
     )
     db.commit()
-    matched = CheckinParser().match_tasks_to_ids(["client proposal"])
+    matched = CheckinParser().match_tasks_to_ids(["client proposal"], "u1")
     assert matched == ["x1"]
+
+
+def test_match_tasks_to_ids_scoped_to_user(fresh_db, monkeypatch):
+    """A task belonging to another user must never match."""
+    db = fresh_db.get_db()
+    db.execute(
+        "INSERT INTO tasks (id, user_id, source, title, status) "
+        "VALUES ('x1', 'other-user', 'manual', 'Write the client proposal', 'pending')"
+    )
+    db.commit()
+    matched = CheckinParser().match_tasks_to_ids(["client proposal"], "u1")
+    assert matched == []

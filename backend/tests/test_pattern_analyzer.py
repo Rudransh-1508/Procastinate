@@ -4,23 +4,26 @@ from datetime import datetime, timezone
 from analysis.pattern_analyzer import PatternAnalyzer
 from db.db import generate_id
 
+UID = "test-user-1"
+OTHER_UID = "test-user-2"
 
-def _task(db, task_id, task_type):
+
+def _task(db, task_id, task_type, user_id=UID):
     db.execute(
-        "INSERT INTO tasks (id, source, title, task_type, created_at, status) "
-        "VALUES (?, 'manual', ?, ?, ?, 'pending')",
-        (task_id, f"task {task_id}", task_type, datetime.now(timezone.utc).isoformat()),
+        "INSERT INTO tasks (id, user_id, source, title, task_type, created_at, status) "
+        "VALUES (?, ?, 'manual', ?, ?, ?, 'pending')",
+        (task_id, user_id, f"task {task_id}", task_type, datetime.now(timezone.utc).isoformat()),
     )
 
 
-def _event(db, task_id, **kw):
+def _event(db, task_id, user_id=UID, **kw):
     db.execute(
         """INSERT INTO procrastination_events
-           (id, task_id, detected_at, delay_start_at, delay_end_at, delay_hours,
+           (id, user_id, task_id, detected_at, delay_start_at, delay_end_at, delay_hours,
             displacement_type, displacement_duration_minutes, unlock_trigger)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            generate_id(), task_id,
+            generate_id(), user_id, task_id,
             kw.get("detected_at", "2026-06-01T10:00:00+00:00"),
             "2026-06-01T08:00:00+00:00",
             kw.get("delay_end_at"),
@@ -44,7 +47,7 @@ def test_avoidance_by_task_type(fresh_db):
     _event(db, "t2", delay_hours=4)
     db.commit()
 
-    result = PatternAnalyzer().avoidance_by_task_type()
+    result = PatternAnalyzer(UID).avoidance_by_task_type()
     assert result["administrative"]["avoidance_rate"] == 1.0
     assert result["administrative"]["avg_delay_hours"] == 15.0
     assert result["technical"]["avoidance_rate"] == 0.5
@@ -59,7 +62,7 @@ def test_temporal_heatmap_shape_and_peak(fresh_db):
         _event(db, "t1", detected_at="2026-06-01T10:00:00+00:00")  # 2026-06-01 is Monday
     db.commit()
 
-    hm = PatternAnalyzer().temporal_heatmap()
+    hm = PatternAnalyzer(UID).temporal_heatmap()
     assert len(hm["matrix"]) == 7
     assert len(hm["matrix"][0]) == 24
     assert hm["total_events"] == 3
@@ -74,7 +77,7 @@ def test_displacement_distribution(fresh_db):
     _event(db, "t1", displacement_type="productive_procrastination", displacement_duration_minutes=30)
     db.commit()
 
-    dist = PatternAnalyzer().displacement_distribution()
+    dist = PatternAnalyzer(UID).displacement_distribution()
     assert round(dist["entertainment_escape"]["frequency"], 2) == 0.67
     assert dist["productive_procrastination"]["frequency"] == 0.33
 
@@ -88,7 +91,7 @@ def test_trigger_effectiveness(fresh_db):
            delay_end_at="2026-06-01T20:00:00+00:00")
     db.commit()
 
-    eff = PatternAnalyzer().trigger_effectiveness()
+    eff = PatternAnalyzer(UID).trigger_effectiveness()
     assert eff["deadline_pressure"]["times_used"] == 2
     assert eff["deadline_pressure"]["avg_delay_before_trigger"] == 10.0
 
@@ -98,12 +101,26 @@ def test_correlation_insufficient_data(fresh_db):
     _task(db, "t1", "creative")
     _event(db, "t1")
     db.commit()
-    res = PatternAnalyzer().correlation_matrix()
+    res = PatternAnalyzer(UID).correlation_matrix()
     assert "error" in res
 
 
 def test_empty_database_is_safe(fresh_db):
-    a = PatternAnalyzer()
+    a = PatternAnalyzer(UID)
     assert a.avoidance_by_task_type() == {}
     assert a.temporal_heatmap()["total_events"] == 0
     assert a.displacement_distribution() == {}
+
+
+def test_data_isolated_between_users(fresh_db):
+    """A second user's data must never leak into the first user's stats."""
+    db = fresh_db.get_db()
+    _task(db, "t1", "administrative", user_id=UID)
+    _event(db, "t1", user_id=UID, delay_hours=10)
+    _task(db, "t2", "administrative", user_id=OTHER_UID)
+    _event(db, "t2", user_id=OTHER_UID, delay_hours=99)
+    db.commit()
+
+    mine = PatternAnalyzer(UID).avoidance_by_task_type()
+    assert mine["administrative"]["total_events"] == 1
+    assert mine["administrative"]["avg_delay_hours"] == 10.0
