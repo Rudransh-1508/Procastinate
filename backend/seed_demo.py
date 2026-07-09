@@ -11,9 +11,10 @@ triggers, time-of-day skew), check-ins, and a computed profile.
 """
 import argparse
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from db.db import init_db, get_db, generate_id
+from timeutil import now_ist
 from analysis.insight_generator import InsightGenerator
 from cli.main import _local_user_id
 
@@ -67,7 +68,7 @@ def wipe(user_id: str):
 
 def seed(user_id: str):
     db = get_db()
-    now = datetime.now(timezone.utc)
+    now = now_ist()
     n_events = 0
 
     for day in range(30, 0, -1):
@@ -75,8 +76,7 @@ def seed(user_id: str):
         # 1-3 avoidance-prone tasks per day
         for _ in range(random.randint(1, 3)):
             ttype = random.choice(TASK_TYPES)
-            created = date.replace(hour=random.randint(8, 11), minute=random.randint(0, 59),
-                                   tzinfo=timezone.utc)
+            created = date.replace(hour=random.randint(8, 11), minute=random.randint(0, 59))
             task_id = generate_id()
             est = random.choice([30, 45, 60, 90, 120])
             avoided = random.random() < AVOIDANCE_BIAS[ttype]

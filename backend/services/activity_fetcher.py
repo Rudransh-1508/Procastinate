@@ -133,7 +133,14 @@ class ActivityFetcher:
 
     def get_displacement_during_delay(self, delay_start: datetime,
                                       delay_end: Optional[datetime]) -> dict:
-        """Return the 'displacement signature' for a delay window."""
+        """Return the 'displacement signature' for a delay window.
+
+        `delay_start`/`delay_end` must be real aware UTC datetimes (this
+        queries the ActivityWatch REST API, which uses true UTC) — callers
+        storing IST-naive timestamps must convert via timeutil.to_utc_aware
+        first. This method's own "now" fallback below is correctly real UTC
+        for the same reason, not a bug to "fix" during an IST migration.
+        """
         end = delay_end or datetime.now(timezone.utc)
         windows = self.build_activity_windows(delay_start, end)
         if not windows:

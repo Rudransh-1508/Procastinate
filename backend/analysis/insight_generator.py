@@ -7,9 +7,9 @@ so the dashboard and confidence level stay current without an LLM.
 Every method is scoped to one user's data.
 """
 import json
-from datetime import datetime, timezone
 
 from db.db import get_db, generate_id
+from timeutil import iso_ist
 from analysis.pattern_analyzer import PatternAnalyzer
 from agent.orchestrator import ProcrastinationAgent
 import config
@@ -111,7 +111,7 @@ class InsightGenerator:
                  trigger_effectiveness = ?, total_events_analyzed = ?, profile_confidence = ?
                WHERE user_id = ?""",
             (
-                datetime.now(timezone.utc).isoformat(),
+                iso_ist(),
                 json.dumps(avoidance), json.dumps(avg_delay),
                 json.dumps(by_hour), json.dumps(by_day),
                 json.dumps(displacement), json.dumps(triggers),
@@ -127,7 +127,7 @@ class InsightGenerator:
         db.execute(
             """INSERT INTO insights (id, user_id, generated_at, kind, title, body, meta)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (generate_id(), self.user_id, datetime.now(timezone.utc).isoformat(), kind, title,
+            (generate_id(), self.user_id, iso_ist(), kind, title,
              body, json.dumps(meta or {})),
         )
         db.commit()
@@ -138,7 +138,7 @@ def _ensure_profile_row(user_id: str):
     if not db.execute("SELECT 1 FROM profile_state WHERE user_id = ?", (user_id,)).fetchone():
         db.execute(
             "INSERT INTO profile_state (user_id, updated_at) VALUES (?, ?)",
-            (user_id, datetime.now(timezone.utc).isoformat()),
+            (user_id, iso_ist()),
         )
         db.commit()
 

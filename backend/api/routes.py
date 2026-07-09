@@ -4,13 +4,13 @@ Every route requires an authenticated user (Depends(current_active_user))
 and every query/write is scoped to that user's own data.
 """
 import json
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import config
 from db.db import get_db, generate_id
+from timeutil import now_ist, iso_ist
 from services.checkin_parser import CheckinParser
 from services.task_poller import TaskPoller, _time_of_day
 from services.plaintext_watcher import sync_task_file
@@ -27,7 +27,7 @@ router = APIRouter()
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return iso_ist()
 
 
 def _uid(user: User) -> str:
@@ -230,6 +230,35 @@ def add_task(body: TaskInput, user: User = Depends(current_active_user)):
     return {"task_id": task_id, "proactive_insight": flag}
 
 
+@router.post("/tasks/{task_id}/complete")
+def complete_task(task_id: str, user: User = Depends(current_active_user)):
+    """Mark a task done. Distinct from avoidance logging — this is the only
+    action that changes a task's status, so completed tasks stop being
+    re-flagged as overdue by the sync job."""
+    uid = _uid(user)
+    db = get_db()
+    task = db.execute(
+        "SELECT * FROM tasks WHERE id = ? AND user_id = ?", (task_id, uid)
+    ).fetchone()
+    if not task:
+        raise HTTPException(status_code=404, detail="task not found")
+
+    now = _now_iso()
+    db.execute(
+        "UPDATE tasks SET status='done', completed_at=?, updated_at=? WHERE id=? AND user_id=?",
+        (now, now, task_id, uid),
+    )
+    # Close any still-open avoidance event for this task so it isn't picked
+    # up again by the next sync as "still avoided".
+    db.execute(
+        """UPDATE procrastination_events SET delay_end_at = ?
+           WHERE task_id = ? AND user_id = ? AND delay_end_at IS NULL""",
+        (now, task_id, uid),
+    )
+    db.commit()
+    return {"task_id": task_id, "status": "done", "completed_at": now}
+
+
 @router.get("/events")
 def list_events(limit: int = 100, user: User = Depends(current_active_user)):
     db = get_db()
@@ -255,7 +284,7 @@ def log_event(body: EventInput, user: User = Depends(current_active_user)):
     if not task:
         raise HTTPException(status_code=404, detail="task not found")
 
-    now = datetime.now(timezone.utc)
+    now = now_ist()
     event_id = generate_id()
     db.execute(
         """INSERT INTO procrastination_events

@@ -84,12 +84,15 @@ def start_scheduler():
     if not config.ENABLE_SCHEDULER:
         return None
     from apscheduler.schedulers.background import BackgroundScheduler
+    from timeutil import IST_TZINFO
 
-    scheduler = BackgroundScheduler(daemon=True)
+    # Explicit IST timezone so "9am"/"7pm"/"Sunday 6pm" mean IST regardless
+    # of what timezone the host machine/server is actually running in.
+    scheduler = BackgroundScheduler(daemon=True, timezone=IST_TZINFO)
     scheduler.add_job(run_sync_job, "interval", hours=1, id="hourly_sync")
     scheduler.add_job(lambda: run_checkin_job("morning"), "cron", hour=9, minute=0, id="morning_checkin")
     scheduler.add_job(lambda: run_checkin_job("evening"), "cron", hour=19, minute=0, id="evening_checkin")
     scheduler.add_job(run_weekly_report_job, "cron", day_of_week="sun", hour=18, id="weekly_report")
     scheduler.start()
-    logger.info("scheduler started")
+    logger.info("scheduler started (IST)")
     return scheduler

@@ -19,12 +19,12 @@ Examples:
 """
 import json
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
 
 from db.db import init_db, get_db, generate_id
+from timeutil import now_ist, iso_ist
 
 app = typer.Typer(help="Procrastination Profiler CLI", no_args_is_help=True)
 task_app = typer.Typer(help="Task commands")
@@ -86,7 +86,7 @@ def checkin(text: str):
             hours_of_sleep, had_heavy_meetings, free_text, extracted_data, tasks_mentioned)
            VALUES (?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            generate_id(), uid, datetime.now(timezone.utc).isoformat(),
+            generate_id(), uid, iso_ist(),
             structured.get("energy_level"), structured.get("stress_level"),
             structured.get("social_context"), structured.get("hours_of_sleep"),
             structured.get("had_heavy_meetings"), text,
@@ -141,7 +141,7 @@ def log_event(
     if not task:
         typer.echo(f"Task {task_id} not found", err=True)
         raise typer.Exit(1)
-    now = datetime.now(timezone.utc)
+    now = now_ist()
     event_id = generate_id()
     db.execute(
         """INSERT INTO procrastination_events
@@ -184,7 +184,7 @@ def task_add(
                               involves_other_people, created_at, status, updated_at)
            VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, 'pending', ?)""",
         (task_id, uid, title, type, est, stakes, people,
-         datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat()),
+         iso_ist(), iso_ist()),
     )
     db.commit()
     typer.echo(f"Added task {task_id}: {title}")

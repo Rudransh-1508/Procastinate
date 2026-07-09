@@ -7,20 +7,33 @@ Note: TODOIST_API_TOKEN is a single global credential (set in .env), not
 per-user — Todoist sync is an optional deployment-wide integration. All
 writes are still scoped to the given user_id.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import requests
 
 import config
 from db.db import get_db, generate_id
+from timeutil import now_ist, iso_ist, parse_ist, IST_OFFSET
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return now_ist()
 
 
 def _iso(dt: datetime) -> str:
     return dt.isoformat()
+
+
+def _todoist_created_at_ist(raw: str | None) -> str | None:
+    """Todoist returns real UTC timestamps ('...Z'); convert to our IST storage
+    convention so delay math against now_ist() stays correct."""
+    if not raw:
+        return None
+    try:
+        utc_dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return (utc_dt.replace(tzinfo=None) + IST_OFFSET).isoformat()
+    except ValueError:
+        return raw
 
 
 class TaskPoller:
@@ -58,7 +71,7 @@ class TaskPoller:
                            VALUES (?, ?, 'todoist', ?, ?, ?, ?, 'pending', ?)""",
                         (
                             str(t["id"]), self.user_id, t.get("content", "untitled"),
-                            t.get("description", ""), t.get("created_at"),
+                            t.get("description", ""), _todoist_created_at_ist(t.get("created_at")),
                             (t.get("due") or {}).get("date"), _iso(_now()),
                         ),
                     )
@@ -94,11 +107,9 @@ class TaskPoller:
         count = 0
         for task in pending:
             try:
-                created = datetime.fromisoformat(task["created_at"].replace("Z", "+00:00"))
-            except (ValueError, AttributeError):
+                created = parse_ist(task["created_at"])
+            except (ValueError, AttributeError, TypeError):
                 continue
-            if created.tzinfo is None:
-                created = created.replace(tzinfo=timezone.utc)
             delay_hours = (now - created).total_seconds() / 3600
             threshold = (task["estimated_minutes"] or 60) / 60
             if delay_hours > max(threshold * 2, 4):

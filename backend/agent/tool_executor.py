@@ -7,9 +7,10 @@ request, NEVER accepted as an LLM-supplied tool argument — the model must not
 be able to choose whose data it reads or writes.
 """
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from db.db import get_db
+from timeutil import now_ist, iso_ist
 from analysis.pattern_analyzer import PatternAnalyzer
 
 VALID_PROFILE_FIELDS = {
@@ -47,7 +48,7 @@ class ToolExecutor:
             query += " AND task_id IN (SELECT id FROM tasks WHERE task_type = ? AND user_id = ?)"
             args.extend([params["task_type"], self.user_id])
         if params.get("days_back"):
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=int(params["days_back"]))).isoformat()
+            cutoff = (now_ist() - timedelta(days=int(params["days_back"]))).isoformat()
             query += " AND detected_at > ?"
             args.append(cutoff)
         if params.get("displacement_type"):
@@ -91,7 +92,7 @@ class ToolExecutor:
         value = params.get("value")
         db.execute(
             f"UPDATE profile_state SET {field} = ?, updated_at = ? WHERE user_id = ?",
-            (json.dumps(value), datetime.now(timezone.utc).isoformat(), self.user_id),
+            (json.dumps(value), iso_ist(), self.user_id),
         )
         db.commit()
         return {"status": "updated", "field": field, "reason": params.get("reason")}
@@ -118,7 +119,7 @@ def _ensure_profile_row(user_id: str):
     if not exists:
         db.execute(
             "INSERT INTO profile_state (user_id, updated_at) VALUES (?, ?)",
-            (user_id, datetime.now(timezone.utc).isoformat()),
+            (user_id, iso_ist()),
         )
         db.commit()
 

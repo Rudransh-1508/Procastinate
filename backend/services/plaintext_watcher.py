@@ -7,10 +7,10 @@ Format (markdown-style):
 Inline metadata: @type:, @est:(m/h), @stakes:, @people:true
 """
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 
 from db.db import get_db, generate_id_from_title
+from timeutil import iso_ist
 
 try:
     from watchdog.events import FileSystemEventHandler
@@ -24,7 +24,7 @@ _META_RE = re.compile(r"@(\w+):(\S+)")
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return iso_ist()
 
 
 def parse_task_file(filepath: str, user_id: str) -> dict[str, dict]:

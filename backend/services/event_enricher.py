@@ -1,8 +1,8 @@
 """Cross-reference task-list delays with ActivityWatch displacement data."""
 import json
-from datetime import datetime
 
 from db.db import get_db, generate_id
+from timeutil import parse_ist, to_utc_aware
 from services.activity_fetcher import ActivityFetcher, CATEGORY_PRODUCTIVITY
 
 
@@ -27,8 +27,10 @@ class EventEnricher:
         if not self.activity.is_available():
             return None
 
-        delay_start = _parse(event["delay_start_at"])
-        delay_end = _parse(event["delay_end_at"]) if event["delay_end_at"] else None
+        # Our own storage is naive IST; ActivityWatch's REST API expects real
+        # UTC, so convert only at this external-system boundary.
+        delay_start = to_utc_aware(parse_ist(event["delay_start_at"]))
+        delay_end = to_utc_aware(parse_ist(event["delay_end_at"])) if event["delay_end_at"] else None
 
         displacement = self.activity.get_displacement_during_delay(delay_start, delay_end)
 
@@ -74,7 +76,3 @@ class EventEnricher:
             if self.enrich_pending_event(r["id"]) is not None:
                 n += 1
         return n
-
-
-def _parse(ts: str) -> datetime:
-    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
