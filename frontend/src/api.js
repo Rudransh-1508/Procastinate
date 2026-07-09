@@ -48,6 +48,7 @@ export const api = {
     }),
   weeklyReport: () => request("/report/weekly"),
   addTask: (task) => request("/tasks", { method: "POST", body: JSON.stringify(task) }),
+  completeTask: (taskId) => request(`/tasks/${taskId}/complete`, { method: "POST" }),
   logEvent: (event) => request("/events", { method: "POST", body: JSON.stringify(event) }),
   sync: () => request("/sync", { method: "POST" }),
 };

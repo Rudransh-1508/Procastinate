@@ -61,7 +61,7 @@ export default function Profile() {
   const hasModel = profile && profile.total_events_analyzed != null;
   const hypotheses = Array.isArray(profile?.active_hypotheses) ? profile.active_hypotheses : [];
   const avoidance = profile?.avoidance_by_type || {};
-  const updated = profile?.updated_at ? new Date(profile.updated_at).toLocaleString() : "never";
+  const updated = profile?.updated_at ? `${new Date(profile.updated_at).toLocaleString()} IST` : "never";
 
   return (
     <div className="space-y-6">

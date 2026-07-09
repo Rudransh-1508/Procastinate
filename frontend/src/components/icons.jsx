@@ -101,6 +101,11 @@ export const Icon = {
       <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
     </svg>
   ),
+  Check: (p) => (
+    <svg {...base} {...p}>
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  ),
   LogOut: (p) => (
     <svg {...base} {...p}>
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />

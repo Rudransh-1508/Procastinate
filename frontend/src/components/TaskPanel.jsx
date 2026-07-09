@@ -139,19 +139,32 @@ function TaskRow({ task, open, onToggle, onLogged }) {
   const [disp, setDisp] = useState("entertainment_escape");
   const [trigger, setTrigger] = useState("");
   const [energy, setEnergy] = useState("");
+  const [completing, setCompleting] = useState(false);
 
   const submit = async (resolved) => {
     await api.logEvent({
       task_id: task.id,
       delay_hours: delay ? Number(delay) : null,
       displacement_type: disp,
-      unlock_trigger: resolved ? trigger || "forced_start" : null,
+      // No fabricated default — only send a trigger if you actually picked one.
+      unlock_trigger: resolved ? trigger || null : null,
       energy_level: energy ? Number(energy) : null,
       delay_resolved: resolved,
     });
     await onLogged();
   };
 
+  const complete = async () => {
+    setCompleting(true);
+    try {
+      await api.completeTask(task.id);
+      await onLogged();
+    } finally {
+      setCompleting(false);
+    }
+  };
+
+  const isDone = task.status === "done";
   const statusTone =
     task.status === "done" ? "text-good" : task.status === "pending" ? "text-fg-muted" : "text-fg-faint";
 
@@ -166,7 +179,13 @@ function TaskRow({ task, open, onToggle, onLogged }) {
         <span className={`text-xs ${statusTone}`}>{task.status}</span>
       </button>
 
-      {open && (
+      {open && isDone && (
+        <div className="border-t border-ink-500 px-3 py-3 text-xs text-good">
+          Completed{task.completed_at ? ` · ${new Date(task.completed_at).toLocaleString()} IST` : ""}
+        </div>
+      )}
+
+      {open && !isDone && (
         <div className="space-y-2.5 border-t border-ink-500 px-3 py-3">
           <div className="flex flex-wrap gap-2">
             <input
@@ -207,6 +226,16 @@ function TaskRow({ task, open, onToggle, onLogged }) {
             </button>
             <button className="btn-primary" onClick={() => submit(true)}>
               Mark started
+            </button>
+          </div>
+          <div className="border-t border-ink-600 pt-2.5">
+            <button
+              className="btn-ghost w-full justify-center text-good hover:bg-good/10"
+              onClick={complete}
+              disabled={completing}
+            >
+              <Icon.Check width={15} height={15} />
+              {completing ? "Completing…" : "Complete task"}
             </button>
           </div>
         </div>
