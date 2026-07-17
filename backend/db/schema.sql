@@ -27,9 +27,12 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE TABLE IF NOT EXISTS procrastination_events (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
-    task_id TEXT REFERENCES tasks(id),
+    task_id TEXT REFERENCES tasks(id),   -- nullable: session-derived events aren't linked to a task
+    task_type TEXT,                      -- denormalized for task_id-less (session) events; task-linked
+                                         -- events resolve type via the tasks join instead (see
+                                         -- PatternAnalyzer.avoidance_by_task_type's COALESCE)
     detected_at TIMESTAMP,
-    detection_source TEXT,               -- 'task_list','activity_watch','checkin','combined'
+    detection_source TEXT,               -- 'task_list','activity_watch','checkin','combined','session'
 
     -- delay dimensions
     delay_start_at TIMESTAMP,
@@ -115,6 +118,38 @@ CREATE TABLE IF NOT EXISTS insights (
     meta TEXT                            -- JSON
 );
 
+-- Natural-language plan -> actual logging. One row = one time-boxed
+-- intention block, from "what's the plan" to "how did it go".
+CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+
+    planned_text TEXT NOT NULL,          -- raw NL input at start
+    title TEXT,                          -- short LLM-extracted label
+    task_type TEXT,                      -- creative/administrative/technical/social/physical/collaborative
+
+    planned_start TIMESTAMP NOT NULL,    -- IST naive, defaults to now()
+    planned_duration_minutes INTEGER NOT NULL,
+    planned_end TIMESTAMP NOT NULL,      -- computed: planned_start + duration
+
+    status TEXT NOT NULL DEFAULT 'active',  -- active | pending_closeout | closed
+
+    closeout_text TEXT,                  -- raw NL input at close-out
+    closed_at TIMESTAMP,
+    outcome TEXT,                        -- early | on_time | delayed | not_done
+    delay_minutes REAL,
+    displacement_type TEXT,              -- same categories as procrastination_events
+    reason TEXT,
+    unlock_trigger TEXT,
+    energy_level INTEGER,                -- 1-5
+    stress_level INTEGER,                -- 1-5
+
+    derived_event_id TEXT,               -- procrastination_events.id if one was derived
+
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id);
 CREATE INDEX IF NOT EXISTS idx_events_user ON procrastination_events(user_id);
 CREATE INDEX IF NOT EXISTS idx_events_task ON procrastination_events(task_id);
@@ -123,3 +158,4 @@ CREATE INDEX IF NOT EXISTS idx_windows_task ON activity_windows(related_task_id)
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_checkins_user ON checkin_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_insights_user ON insights(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_status ON sessions(user_id, status);
