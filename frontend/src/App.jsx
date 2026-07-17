@@ -5,6 +5,7 @@ import Landing from "./pages/Landing.jsx";
 import Login from "./pages/Login.jsx";
 import AuthCallback from "./pages/AuthCallback.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
+import Sessions from "./pages/Sessions.jsx";
 import CheckIn from "./pages/CheckIn.jsx";
 import Query from "./pages/Query.jsx";
 import Profile from "./pages/Profile.jsx";
@@ -72,6 +73,7 @@ function AppRoutes() {
         }
       >
         <Route index element={<Dashboard />} />
+        <Route path="sessions" element={<Sessions />} />
         <Route path="checkin" element={<CheckIn />} />
         <Route path="query" element={<Query />} />
         <Route path="profile" element={<Profile />} />

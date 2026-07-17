@@ -6,6 +6,7 @@ import { useAuth } from "../AuthContext.jsx";
 
 const nav = [
   { to: "/app", label: "Dashboard", icon: Icon.Dashboard, end: true },
+  { to: "/app/sessions", label: "Sessions", icon: Icon.Clock },
   { to: "/app/checkin", label: "Check-in", icon: Icon.CheckIn },
   { to: "/app/query", label: "Ask", icon: Icon.Query },
   { to: "/app/profile", label: "Profile", icon: Icon.Profile },

@@ -51,6 +51,12 @@ export const api = {
   completeTask: (taskId) => request(`/tasks/${taskId}/complete`, { method: "POST" }),
   logEvent: (event) => request("/events", { method: "POST", body: JSON.stringify(event) }),
   sync: () => request("/sync", { method: "POST" }),
+  startSession: (text) => request("/sessions/start", { method: "POST", body: JSON.stringify({ text }) }),
+  closeoutSession: (id, text) =>
+    request(`/sessions/${id}/closeout`, { method: "POST", body: JSON.stringify({ text }) }),
+  sessions: (limit = 50) => request(`/sessions?limit=${limit}`),
+  activeSession: () => request("/sessions/active"),
+  productivityInsights: () => request("/insights/productivity"),
 };
 
 export const googleAuthorizeUrl = () => `${BASE}/auth/google/authorize`;

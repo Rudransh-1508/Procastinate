@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import { Panel, StatCard, ConfidenceBadge, Spinner } from "../components/ui.jsx";
 import { Icon } from "../components/icons.jsx";
@@ -6,12 +7,15 @@ import TemporalHeatmap from "../components/TemporalHeatmap.jsx";
 import AvoidanceChart from "../components/AvoidanceChart.jsx";
 import DisplacementDonut from "../components/DisplacementDonut.jsx";
 import TriggerEffectiveness from "../components/TriggerEffectiveness.jsx";
+import ProductivityByHour from "../components/ProductivityByHour.jsx";
 import TaskPanel from "../components/TaskPanel.jsx";
 
 const fmt = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ") : "—");
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
+  const [productivity, setProductivity] = useState(null);
+  const [pendingSession, setPendingSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -19,8 +23,14 @@ export default function Dashboard() {
   const load = useCallback(async () => {
     try {
       setError(null);
-      const d = await api.dashboard();
+      const [d, prod, active] = await Promise.all([
+        api.dashboard(),
+        api.productivityInsights(),
+        api.activeSession(),
+      ]);
       setData(d);
+      setProductivity(prod);
+      setPendingSession(active?.status === "pending_closeout" ? active : null);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -81,6 +91,20 @@ export default function Dashboard() {
         </div>
       )}
 
+      {pendingSession && (
+        <Link
+          to="/app/sessions"
+          className="panel flex items-center gap-3 border-ochre/40 bg-ochre/5 px-4 py-3 text-sm transition-colors hover:bg-ochre/10"
+        >
+          <Icon.Clock width={16} height={16} className="shrink-0 text-ochre-soft" />
+          <span className="flex-1 text-fg">
+            Your <span className="font-medium">{pendingSession.title}</span> session ended — what
+            happened?
+          </span>
+          <Icon.ArrowRight width={14} height={14} className="shrink-0 text-fg-faint" />
+        </Link>
+      )}
+
       {/* KPI row */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard index={0} label="Events logged" value={status.total_events ?? 0} tone="brand" />
@@ -103,6 +127,10 @@ export default function Dashboard() {
       {/* Heatmap full width */}
       <Panel index={4} title="Temporal pattern · when you avoid">
         <TemporalHeatmap data={data?.temporal_heatmap} />
+      </Panel>
+
+      <Panel index={4} title="Productivity by hour · when you're actually sharp">
+        <ProductivityByHour data={productivity} />
       </Panel>
 
       {/* Two-up charts */}
