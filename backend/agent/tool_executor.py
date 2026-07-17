@@ -45,8 +45,12 @@ class ToolExecutor:
         query = "SELECT * FROM procrastination_events WHERE user_id = ?"
         args: list = [self.user_id]
         if params.get("task_type"):
-            query += " AND task_id IN (SELECT id FROM tasks WHERE task_type = ? AND user_id = ?)"
-            args.extend([params["task_type"], self.user_id])
+            # Session-derived events carry task_type directly (no task_id);
+            # task-linked events resolve it via the tasks subquery instead.
+            query += """ AND (task_type = ? OR task_id IN (
+                SELECT id FROM tasks WHERE task_type = ? AND user_id = ?
+            ))"""
+            args.extend([params["task_type"], params["task_type"], self.user_id])
         if params.get("days_back"):
             cutoff = (now_ist() - timedelta(days=int(params["days_back"]))).isoformat()
             query += " AND detected_at > ?"
@@ -76,6 +80,8 @@ class ToolExecutor:
             "trigger_effectiveness": analyzer.trigger_effectiveness,
             "displacement_distribution": analyzer.displacement_distribution,
             "correlation_matrix": analyzer.correlation_matrix,
+            "completion_by_hour": analyzer.completion_rate_by_hour,
+            "energy_by_hour": analyzer.energy_by_hour,
         }
         analysis_type = params.get("analysis_type")
         fn = dispatch.get(analysis_type)

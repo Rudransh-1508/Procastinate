@@ -18,15 +18,18 @@ class PatternAnalyzer:
 
     def avoidance_by_task_type(self) -> dict:
         db = get_db()
+        # LEFT JOIN + COALESCE: session-derived events have no task_id (and
+        # so no row in `tasks`), but carry their own pe.task_type directly —
+        # an INNER JOIN would silently drop them from this chart.
         rows = db.execute(
-            """SELECT COALESCE(t.task_type, 'unknown') AS task_type,
+            """SELECT COALESCE(pe.task_type, t.task_type, 'unknown') AS task_type,
                       COUNT(*) AS total_events,
                       AVG(pe.delay_hours) AS avg_delay,
                       COUNT(CASE WHEN pe.delay_end_at IS NOT NULL THEN 1 END) AS completed
                FROM procrastination_events pe
-               JOIN tasks t ON t.id = pe.task_id
+               LEFT JOIN tasks t ON t.id = pe.task_id
                WHERE pe.user_id = ?
-               GROUP BY task_type""",
+               GROUP BY COALESCE(pe.task_type, t.task_type, 'unknown')""",
             (self.user_id,),
         ).fetchall()
 
@@ -144,3 +147,54 @@ class PatternAnalyzer:
                 "n": len(paired),
             }
         return result
+
+    # -- productivity-by-hour (from ALL closed sessions, not just avoided ones) --
+    def energy_by_hour(self) -> dict:
+        """Average self-reported energy per hour-of-day, from closed sessions."""
+        db = get_db()
+        rows = db.execute(
+            """SELECT CAST(strftime('%H', planned_start) AS INTEGER) AS hour, energy_level
+               FROM sessions WHERE user_id = ? AND status = 'closed' AND energy_level IS NOT NULL""",
+            (self.user_id,),
+        ).fetchall()
+
+        by_hour: dict[int, list[float]] = {}
+        for row in rows:
+            by_hour.setdefault(row["hour"], []).append(row["energy_level"])
+
+        energy = [0.0] * 24
+        for h, vals in by_hour.items():
+            energy[h] = round(sum(vals) / len(vals), 2)
+        return {"energy_by_hour": energy, "n": len(rows)}
+
+    def completion_rate_by_hour(self) -> dict:
+        """% of sessions finished on-time/early (vs. delayed/not-done), per hour-of-day."""
+        db = get_db()
+        rows = db.execute(
+            """SELECT CAST(strftime('%H', planned_start) AS INTEGER) AS hour, outcome
+               FROM sessions WHERE user_id = ? AND status = 'closed' AND outcome IS NOT NULL""",
+            (self.user_id,),
+        ).fetchall()
+
+        by_hour: dict[int, list[str]] = {}
+        for row in rows:
+            by_hour.setdefault(row["hour"], []).append(row["outcome"])
+
+        rate = [0.0] * 24
+        counts = [0] * 24
+        for h, outcomes in by_hour.items():
+            good = sum(1 for o in outcomes if o in ("early", "on_time"))
+            rate[h] = round(good / len(outcomes), 2)
+            counts[h] = len(outcomes)
+
+        hours_with_data = [h for h in range(24) if counts[h] > 0]
+        peak_hour = max(hours_with_data, key=lambda h: rate[h]) if hours_with_data else None
+        trough_hour = min(hours_with_data, key=lambda h: rate[h]) if hours_with_data else None
+
+        return {
+            "completion_rate_by_hour": rate,
+            "counts_by_hour": counts,
+            "peak_hour": peak_hour,
+            "trough_hour": trough_hour,
+            "n": len(rows),
+        }

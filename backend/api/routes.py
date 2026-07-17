@@ -4,14 +4,16 @@ Every route requires an authenticated user (Depends(current_active_user))
 and every query/write is scoped to that user's own data.
 """
 import json
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import config
 from db.db import get_db, generate_id
-from timeutil import now_ist, iso_ist
+from timeutil import now_ist, iso_ist, parse_ist
 from services.checkin_parser import CheckinParser
+from services.session_parser import SessionParser
 from services.task_poller import TaskPoller, _time_of_day
 from services.plaintext_watcher import sync_task_file
 from services.event_enricher import EventEnricher
@@ -65,6 +67,14 @@ class EventInput(BaseModel):
     delay_resolved: bool = False
 
 
+class SessionStartInput(BaseModel):
+    text: str
+
+
+class SessionCloseoutInput(BaseModel):
+    text: str
+
+
 # --- status / dashboard ----------------------------------------------------
 @router.get("/status")
 def get_status(user: User = Depends(current_active_user)):
@@ -98,6 +108,23 @@ def get_dashboard(user: User = Depends(current_active_user)):
         "displacement_distribution": analyzer.displacement_distribution(),
         "trigger_effectiveness": analyzer.trigger_effectiveness(),
         "correlation": analyzer.correlation_matrix(),
+    }
+
+
+@router.get("/insights/productivity")
+def get_productivity_insights(user: User = Depends(current_active_user)):
+    """Energy/completion by hour-of-day — computed from ALL closed sessions,
+    not just avoided ones, so it can answer 'when am I actually productive'."""
+    analyzer = PatternAnalyzer(_uid(user))
+    energy = analyzer.energy_by_hour()
+    completion = analyzer.completion_rate_by_hour()
+    return {
+        "energy_by_hour": energy["energy_by_hour"],
+        "completion_rate_by_hour": completion["completion_rate_by_hour"],
+        "counts_by_hour": completion["counts_by_hour"],
+        "peak_hour": completion["peak_hour"],
+        "trough_hour": completion["trough_hour"],
+        "n": completion["n"],
     }
 
 
@@ -263,7 +290,8 @@ def complete_task(task_id: str, user: User = Depends(current_active_user)):
 def list_events(limit: int = 100, user: User = Depends(current_active_user)):
     db = get_db()
     rows = db.execute(
-        """SELECT pe.*, t.title AS task_title, t.task_type
+        """SELECT pe.*, t.title AS task_title,
+                  COALESCE(pe.task_type, t.task_type) AS task_type
            FROM procrastination_events pe
            LEFT JOIN tasks t ON t.id = pe.task_id
            WHERE pe.user_id = ?
@@ -313,3 +341,159 @@ def manual_sync(user: User = Depends(current_active_user)):
     poll_res = TaskPoller(uid).sync()
     enriched = EventEnricher(uid).enrich_all_open_events()
     return {"file": file_res, "poller": poll_res, "enriched": enriched}
+
+
+# --- sessions (natural-language plan -> actual logging) ---------------------
+GRACE_MINUTES = 15  # delay this small still counts as "on_time"
+
+
+def _flip_expired_sessions(db, uid: str) -> None:
+    """Any 'active' session whose planned_end has passed becomes
+    'pending_closeout' — checked lazily on read, no scheduler job needed."""
+    db.execute(
+        """UPDATE sessions SET status = 'pending_closeout', updated_at = ?
+           WHERE user_id = ? AND status = 'active' AND planned_end <= ?""",
+        (iso_ist(), uid, iso_ist()),
+    )
+    db.commit()
+
+
+@router.post("/sessions/start")
+def start_session(body: SessionStartInput, user: User = Depends(current_active_user)):
+    uid = _uid(user)
+    db = get_db()
+    _flip_expired_sessions(db, uid)
+
+    existing = db.execute(
+        "SELECT id FROM sessions WHERE user_id = ? AND status IN ('active','pending_closeout')",
+        (uid,),
+    ).fetchone()
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail="You already have a session in progress — close it out before starting another.",
+        )
+
+    plan = SessionParser().parse_plan(body.text)
+    now = now_ist()
+    planned_end = now + timedelta(minutes=plan["planned_duration_minutes"])
+    session_id = generate_id()
+    db.execute(
+        """INSERT INTO sessions
+           (id, user_id, planned_text, title, task_type, planned_start,
+            planned_duration_minutes, planned_end, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
+        (
+            session_id, uid, body.text, plan["title"], plan["task_type"],
+            now.isoformat(), plan["planned_duration_minutes"], planned_end.isoformat(),
+            iso_ist(), iso_ist(),
+        ),
+    )
+    db.commit()
+    return _get_session(db, session_id, uid)
+
+
+@router.post("/sessions/{session_id}/closeout")
+def closeout_session(session_id: str, body: SessionCloseoutInput, user: User = Depends(current_active_user)):
+    uid = _uid(user)
+    db = get_db()
+    _flip_expired_sessions(db, uid)
+
+    session = db.execute(
+        "SELECT * FROM sessions WHERE id = ? AND user_id = ?", (session_id, uid)
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="session not found")
+    if session["status"] == "closed":
+        raise HTTPException(status_code=409, detail="session already closed")
+
+    parsed = SessionParser().parse_closeout(
+        body.text, session["planned_text"], session["planned_duration_minutes"]
+    )
+
+    now = now_ist()
+    planned_end = parse_ist(session["planned_end"])
+
+    # Outcome is computed here, server-side, from real timestamps — never
+    # trusted to the LLM (see design spec §4).
+    if now < planned_end:
+        outcome = "early"
+        delay_minutes = 0.0
+    else:
+        if not parsed["completed"]:
+            outcome = "not_done"
+            delay_minutes = max(0.0, (now - planned_end).total_seconds() / 60)
+        else:
+            actual_completion = now
+            if parsed["actual_delay_minutes"] is not None:
+                actual_completion = now - timedelta(minutes=parsed["actual_delay_minutes"])
+            delay_minutes = max(0.0, (actual_completion - planned_end).total_seconds() / 60)
+            outcome = "on_time" if delay_minutes <= GRACE_MINUTES else "delayed"
+
+    displacement_type = parsed["displacement_type"] if outcome in ("delayed", "not_done") else None
+
+    derived_event_id = None
+    if outcome in ("delayed", "not_done"):
+        planned_start = parse_ist(session["planned_start"])
+        derived_event_id = generate_id()
+        db.execute(
+            """INSERT INTO procrastination_events
+               (id, user_id, task_id, task_type, detected_at, detection_source, delay_start_at,
+                delay_end_at, delay_hours, displacement_type, energy_level, stress_level, notes,
+                unlock_trigger, day_of_week, time_of_day, confidence_score)
+               VALUES (?, ?, NULL, ?, ?, 'session', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.9)""",
+            (
+                derived_event_id, uid, session["task_type"], iso_ist(), session["planned_start"],
+                iso_ist() if outcome == "delayed" else None,
+                round(delay_minutes / 60, 3), displacement_type,
+                parsed["energy_level"], parsed["stress_level"], parsed["reason"],
+                parsed["unlock_trigger"], planned_start.weekday(), _time_of_day(planned_start),
+            ),
+        )
+
+    db.execute(
+        """UPDATE sessions SET
+             status = 'closed', closeout_text = ?, closed_at = ?, outcome = ?,
+             delay_minutes = ?, displacement_type = ?, reason = ?, unlock_trigger = ?,
+             energy_level = ?, stress_level = ?, derived_event_id = ?, updated_at = ?
+           WHERE id = ? AND user_id = ?""",
+        (
+            body.text, iso_ist(), outcome, round(delay_minutes, 1), displacement_type,
+            parsed["reason"], parsed["unlock_trigger"], parsed["energy_level"],
+            parsed["stress_level"], derived_event_id, iso_ist(), session_id, uid,
+        ),
+    )
+    db.commit()
+    return _get_session(db, session_id, uid)
+
+
+@router.get("/sessions")
+def list_sessions(limit: int = 50, user: User = Depends(current_active_user)):
+    uid = _uid(user)
+    db = get_db()
+    _flip_expired_sessions(db, uid)
+    rows = db.execute(
+        "SELECT * FROM sessions WHERE user_id = ? ORDER BY planned_start DESC LIMIT ?",
+        (uid, limit),
+    ).fetchall()
+    return {"sessions": [dict(r) for r in rows]}
+
+
+@router.get("/sessions/active")
+def get_active_session(user: User = Depends(current_active_user)):
+    uid = _uid(user)
+    db = get_db()
+    _flip_expired_sessions(db, uid)
+    row = db.execute(
+        """SELECT * FROM sessions WHERE user_id = ? AND status IN ('active', 'pending_closeout')
+           ORDER BY planned_start DESC LIMIT 1""",
+        (uid,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _get_session(db, session_id: str, uid: str) -> dict:
+    row = db.execute(
+        "SELECT * FROM sessions WHERE id = ? AND user_id = ?", (session_id, uid)
+    ).fetchone()
+    return dict(row)

@@ -45,6 +45,8 @@ TOOLS = [
                             "trigger_effectiveness",
                             "displacement_distribution",
                             "correlation_matrix",
+                            "completion_by_hour",
+                            "energy_by_hour",
                         ],
                     }
                 },
